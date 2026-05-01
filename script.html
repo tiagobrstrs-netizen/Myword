@@ -1,0 +1,366 @@
+/* =====================================================
+SCRIPT.JS — Mon Monde 🌍
+===================================================== */
+
+/* =====================================================
+🔑 CLÉ MAPBOX
+===================================================== */
+/*
+IMPORTANT : remplace le texte ci-dessous par ta propre clé Mapbox.
+
+Comment obtenir une clé GRATUITE :
+
+1. Va sur https://mapbox.com
+1. Crée un compte gratuit
+1. Va dans “Tokens” (dans ton tableau de bord)
+1. Copie ton “Default public token”
+1. Colle-le ci-dessous entre les guillemets
+   */
+   mapboxgl.accessToken = ‘METS_TA_CLE_MAPBOX_ICI’;
+
+/* =====================================================
+🗺️ INITIALISATION DE LA CARTE
+===================================================== */
+const map = new mapboxgl.Map({
+container: ‘map’,              // l’élément HTML avec id=“map”
+style: ‘mapbox://styles/mapbox/streets-v12’,  // style de carte coloré
+center: [2.3522, 48.8566],     // Paris par défaut [longitude, latitude]
+zoom: 4,                       // niveau de zoom initial
+pitch: 40,                     // inclinaison pour l’effet 3D
+bearing: 0,                    // rotation de la carte
+antialias: true                // meilleure qualité d’affichage
+});
+
+// Boutons de navigation (zoom + / zoom - + orientation)
+map.addControl(new mapboxgl.NavigationControl(), ‘bottom-right’);
+
+// Bouton pour centrer sur ta position GPS
+map.addControl(new mapboxgl.GeolocateControl({
+positionOptions: { enableHighAccuracy: true },
+trackUserLocation: true,
+showUserHeading: true
+}), ‘bottom-right’);
+
+/* =====================================================
+🔍 BARRE DE RECHERCHE
+===================================================== */
+const geocoder = new MapboxGeocoder({
+accessToken: mapboxgl.accessToken,
+mapboxgl: mapboxgl,
+placeholder: ‘🔍 Rechercher un lieu…’,
+language: ‘fr’,    // résultats en français
+flyTo: {
+speed: 1.5,      // vitesse du déplacement
+curve: 1.8,      // courbe du zoom
+pitch: 40        // garde l’effet 3D
+}
+});
+
+// On ajoute la barre de recherche en haut à gauche de la carte
+map.addControl(geocoder, ‘top-left’);
+
+/* =====================================================
+💾 DONNÉES : lecture et écriture dans localStorage
+===================================================== */
+
+// Lit les lieux enregistrés (ou retourne un tableau vide si rien)
+function loadPlaces() {
+const data = localStorage.getItem(‘monMondePlaces’);
+return data ? JSON.parse(data) : [];
+}
+
+// Sauvegarde les lieux dans localStorage
+function savePlaces(places) {
+localStorage.setItem(‘monMondePlaces’, JSON.stringify(places));
+}
+
+/* =====================================================
+📍 VARIABLES GLOBALES
+===================================================== */
+let pendingLng = null;   // longitude du clic en attente
+let pendingLat = null;   // latitude du clic en attente
+let pendingPhotos = [];  // photos en attente (format base64)
+let currentId = null;    // id du lieu actuellement ouvert dans la modal
+let markers = {};        // stocke les objets marqueurs Mapbox {id: marker}
+
+/* =====================================================
+🖱️ CLIC SUR LA CARTE → affiche le popup “Ajouter ?”
+===================================================== */
+map.on(‘click’, function(event) {
+// On récupère les coordonnées du clic
+pendingLng = event.lngLat.lng;
+pendingLat = event.lngLat.lat;
+
+// On affiche le popup
+document.getElementById(‘popup-add’).classList.remove(‘hidden’);
+});
+
+/* =====================================================
+POPUP “AJOUTER CE LIEU ?”
+===================================================== */
+
+// Ferme le popup sans rien faire
+function closePopup() {
+document.getElementById(‘popup-add’).classList.add(‘hidden’);
+pendingLng = null;
+pendingLat = null;
+}
+
+// Ouvre le formulaire pour remplir les infos
+function openForm() {
+document.getElementById(‘popup-add’).classList.add(‘hidden’);
+document.getElementById(‘form-overlay’).classList.remove(‘hidden’);
+
+// Réinitialise le formulaire
+document.getElementById(‘inp-name’).value = ‘’;
+document.getElementById(‘inp-song’).value = ‘’;
+document.getElementById(‘inp-photos’).value = ‘’;
+document.getElementById(‘photos-preview’).innerHTML = ‘’;
+pendingPhotos = [];
+}
+
+// Ferme le formulaire
+function closeForm() {
+document.getElementById(‘form-overlay’).classList.add(‘hidden’);
+pendingLng = null;
+pendingLat = null;
+}
+
+/* =====================================================
+📸 APERÇU DES PHOTOS DANS LE FORMULAIRE
+===================================================== */
+function previewPhotos() {
+const input = document.getElementById(‘inp-photos’);
+const preview = document.getElementById(‘photos-preview’);
+preview.innerHTML = ‘’;
+pendingPhotos = [];
+
+// On lit chaque fichier image choisi
+Array.from(input.files).forEach(file => {
+const reader = new FileReader();
+reader.onload = function(e) {
+// On convertit la photo en base64 (texte) pour pouvoir la stocker
+pendingPhotos.push(e.target.result);
+
+```
+  // On affiche un aperçu
+  const img = document.createElement('img');
+  img.src = e.target.result;
+  preview.appendChild(img);
+};
+reader.readAsDataURL(file);
+```
+
+});
+}
+
+/* =====================================================
+💾 ENREGISTRER UN LIEU
+===================================================== */
+function savePlace() {
+const name = document.getElementById(‘inp-name’).value.trim();
+
+// Vérifie qu’un nom a été renseigné
+if (!name) {
+alert(‘⚠️ Donne un nom à ce lieu !’);
+return;
+}
+
+// Crée l’objet du lieu
+const place = {
+id:     Date.now(),                             // identifiant unique (timestamp)
+name:   name,
+song:   document.getElementById(‘inp-song’).value.trim(),
+photos: […pendingPhotos],                     // copie des photos
+lng:    pendingLng,
+lat:    pendingLat
+};
+
+// Ajoute le lieu dans le tableau et sauvegarde
+const places = loadPlaces();
+places.push(place);
+savePlaces(places);
+
+// Ajoute le marqueur sur la carte
+addMarker(place);
+
+// Met à jour la liste des favoris
+renderFavList();
+
+// Ferme le formulaire
+closeForm();
+}
+
+/* =====================================================
+📌 AJOUTER UN MARQUEUR SUR LA CARTE
+===================================================== */
+function addMarker(place) {
+// Crée un élément HTML pour le marqueur (emoji épingle)
+const el = document.createElement(‘div’);
+el.className = ‘marker’;
+el.textContent = ‘📍’;
+el.title = place.name;
+
+// Au clic sur le marqueur → ouvre la modal du lieu
+el.addEventListener(‘click’, function(e) {
+e.stopPropagation(); // empêche de déclencher aussi le clic sur la carte
+openModal(place.id);
+});
+
+// Ajoute le marqueur sur la carte aux bonnes coordonnées
+const marker = new mapboxgl.Marker(el)
+.setLngLat([place.lng, place.lat])
+.addTo(map);
+
+// Stocke le marqueur pour pouvoir le supprimer plus tard
+markers[place.id] = marker;
+}
+
+/* =====================================================
+🔍 MODAL : VOIR UN LIEU
+===================================================== */
+function openModal(id) {
+const places = loadPlaces();
+const place = places.find(p => p.id === id);
+if (!place) return;
+
+currentId = id; // mémorise quel lieu est ouvert
+
+// Rempli la modal avec les infos
+document.getElementById(‘modal-name’).textContent = ’📍 ’ + place.name;
+document.getElementById(‘modal-song’).textContent = place.song ? ’🎵 ’ + place.song : ‘’;
+
+// Affiche les photos
+const photosDiv = document.getElementById(‘modal-photos’);
+photosDiv.innerHTML = ‘’;
+if (place.photos && place.photos.length > 0) {
+place.photos.forEach(src => {
+const img = document.createElement(‘img’);
+img.src = src;
+photosDiv.appendChild(img);
+});
+}
+
+// Affiche la modal
+document.getElementById(‘modal’).classList.remove(‘hidden’);
+}
+
+// Ferme la modal
+function closeModal() {
+document.getElementById(‘modal’).classList.add(‘hidden’);
+currentId = null;
+}
+
+/* =====================================================
+🗑️ SUPPRIMER UN LIEU
+===================================================== */
+function deletePlace() {
+if (!currentId) return;
+
+if (!confirm(‘Supprimer ce lieu définitivement ?’)) return;
+
+// Supprime le marqueur de la carte
+if (markers[currentId]) {
+markers[currentId].remove();
+delete markers[currentId];
+}
+
+// Supprime de localStorage
+let places = loadPlaces();
+places = places.filter(p => p.id !== currentId);
+savePlaces(places);
+
+// Met à jour la liste
+renderFavList();
+
+// Ferme la modal
+closeModal();
+}
+
+/* =====================================================
+❤️ PANNEAU LISTE DES LIEUX
+===================================================== */
+
+// Ouvre/ferme le panneau
+function togglePanel() {
+document.getElementById(‘panel’).classList.toggle(‘hidden’);
+}
+
+// Génère la liste HTML des lieux
+function renderFavList() {
+const places = loadPlaces();
+const list = document.getElementById(‘fav-list’);
+
+// Si aucun lieu enregistré
+if (places.length === 0) {
+list.innerHTML = ‘<p class="empty-msg">🌍 Aucun lieu enregistré.<br>Clique sur la carte pour ajouter ton premier souvenir !</p>’;
+return;
+}
+
+// Génère une carte pour chaque lieu
+list.innerHTML = ‘’;
+places.forEach(place => {
+const item = document.createElement(‘div’);
+item.className = ‘fav-item’;
+item.innerHTML = `<div class="fav-pin">📍</div> <div> <div class="fav-name">${place.name}</div> <div class="fav-sub">${place.song || 'Aucune chanson'}</div> </div>`;
+
+```
+// Clic sur un lieu → vole vers lui et ouvre la modal
+item.addEventListener('click', function() {
+  map.flyTo({
+    center: [place.lng, place.lat],
+    zoom: 14,
+    speed: 1.5,
+    pitch: 40
+  });
+  togglePanel(); // ferme le panneau
+  setTimeout(() => openModal(place.id), 800); // ouvre après l'animation
+});
+
+list.appendChild(item);
+```
+
+});
+}
+
+/* =====================================================
+🌙 MODE SOMBRE
+===================================================== */
+function toggleDark() {
+const isDark = document.body.classList.toggle(‘dark’);
+
+// Change aussi le style de la carte
+if (isDark) {
+map.setStyle(‘mapbox://styles/mapbox/dark-v11’);
+document.getElementById(‘btn-dark’).textContent = ‘☀️’;
+localStorage.setItem(‘monMondeDark’, ‘true’);
+} else {
+map.setStyle(‘mapbox://styles/mapbox/streets-v12’);
+document.getElementById(‘btn-dark’).textContent = ‘🌙’;
+localStorage.setItem(‘monMondeDark’, ‘false’);
+}
+
+// Après le changement de style, recharge les marqueurs
+// (le changement de style efface les marqueurs Mapbox)
+map.once(‘style.load’, function() {
+markers = {};
+loadPlaces().forEach(addMarker);
+});
+}
+
+/* =====================================================
+🚀 INITIALISATION AU CHARGEMENT DE LA PAGE
+===================================================== */
+map.on(‘load’, function() {
+
+// Restaure le mode sombre si activé précédemment
+if (localStorage.getItem(‘monMondeDark’) === ‘true’) {
+toggleDark();
+}
+
+// Charge tous les marqueurs enregistrés
+loadPlaces().forEach(addMarker);
+
+// Génère la liste des favoris
+renderFavList();
+});
